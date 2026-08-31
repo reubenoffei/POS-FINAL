@@ -90,12 +90,33 @@ export function subscribeToDoc<T>(
   }
 }
 
+// --- SANITIZE FOR FIRESTORE (Removes undefined fields to prevent Firestore serialization rejection) ---
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return null as any;
+  }
+  if (Array.isArray(data)) {
+    return data.map((item) => sanitizeForFirestore(item)) as any;
+  }
+  if (typeof data === 'object') {
+    const clean: any = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        clean[key] = sanitizeForFirestore(value);
+      }
+    }
+    return clean;
+  }
+  return data;
+}
+
 // --- SYNC MUTATION HELPERS ---
 
 export async function saveDocument(collectionName: string, id: string, data: any) {
   try {
     const docRef = doc(db, collectionName, id);
-    await setDoc(docRef, data, { merge: true });
+    const cleanData = sanitizeForFirestore(data);
+    await setDoc(docRef, cleanData, { merge: true });
   } catch (error) {
     console.error(`Failed to save doc to ${collectionName}:`, error);
   }
@@ -104,7 +125,8 @@ export async function saveDocument(collectionName: string, id: string, data: any
 export async function updateDocument(collectionName: string, id: string, data: any) {
   try {
     const docRef = doc(db, collectionName, id);
-    await updateDoc(docRef, data);
+    const cleanData = sanitizeForFirestore(data);
+    await updateDoc(docRef, cleanData);
   } catch (error) {
     console.error(`Failed to update doc in ${collectionName}:`, error);
   }
@@ -136,42 +158,42 @@ export async function seedInitialFirestoreData(seedData: {
     const batch = writeBatch(db);
 
     seedData.branches.forEach((b) => {
-      batch.set(doc(db, COLLECTIONS.BRANCHES, b.id), b);
+      batch.set(doc(db, COLLECTIONS.BRANCHES, b.id), sanitizeForFirestore(b));
     });
 
     seedData.accounts.forEach((a) => {
-      batch.set(doc(db, COLLECTIONS.ACCOUNTS, a.id), a);
+      batch.set(doc(db, COLLECTIONS.ACCOUNTS, a.id), sanitizeForFirestore(a));
     });
 
     seedData.products.forEach((p) => {
-      batch.set(doc(db, COLLECTIONS.PRODUCTS, p.id), p);
+      batch.set(doc(db, COLLECTIONS.PRODUCTS, p.id), sanitizeForFirestore(p));
     });
 
     seedData.suppliers.forEach((s) => {
-      batch.set(doc(db, COLLECTIONS.SUPPLIERS, s.id), s);
+      batch.set(doc(db, COLLECTIONS.SUPPLIERS, s.id), sanitizeForFirestore(s));
     });
 
     seedData.customers.forEach((c) => {
-      batch.set(doc(db, COLLECTIONS.CUSTOMERS, c.id), c);
+      batch.set(doc(db, COLLECTIONS.CUSTOMERS, c.id), sanitizeForFirestore(c));
     });
 
     seedData.sales.forEach((s) => {
-      batch.set(doc(db, COLLECTIONS.SALES, s.id), s);
+      batch.set(doc(db, COLLECTIONS.SALES, s.id), sanitizeForFirestore(s));
     });
 
     seedData.purchases.forEach((p) => {
-      batch.set(doc(db, COLLECTIONS.PURCHASES, p.id), p);
+      batch.set(doc(db, COLLECTIONS.PURCHASES, p.id), sanitizeForFirestore(p));
     });
 
     seedData.expenses.forEach((e) => {
-      batch.set(doc(db, COLLECTIONS.EXPENSES, e.id), e);
+      batch.set(doc(db, COLLECTIONS.EXPENSES, e.id), sanitizeForFirestore(e));
     });
 
     seedData.stockAdjustments.forEach((adj) => {
-      batch.set(doc(db, COLLECTIONS.ADJUSTMENTS, adj.id), adj);
+      batch.set(doc(db, COLLECTIONS.ADJUSTMENTS, adj.id), sanitizeForFirestore(adj));
     });
 
-    batch.set(doc(db, COLLECTIONS.STORE_META, 'global_settings'), seedData.settings);
+    batch.set(doc(db, COLLECTIONS.STORE_META, 'global_settings'), sanitizeForFirestore(seedData.settings));
 
     await batch.commit();
     console.log('Firebase Firestore successfully bootstrapped with real-time seed data.');

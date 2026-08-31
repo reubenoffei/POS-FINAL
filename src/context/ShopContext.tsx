@@ -484,11 +484,19 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const newBranch: Branch = {
       ...branchData,
       id: `branch-${Date.now()}`,
+      code: branchData.code || `BR-${(branches.length + 1).toString().padStart(2, '0')}`,
+      address: branchData.address || '',
+      phone: branchData.phone || '',
+      managerName: branchData.managerName || '',
       isHeadBranch: false,
       active: true,
       createdAt: new Date().toISOString(),
     };
-    setBranches((prev) => [...prev, newBranch]);
+    setBranches((prev) => {
+      const next = [...prev, newBranch];
+      localStorage.setItem(STORAGE_KEYS.BRANCHES, JSON.stringify(next));
+      return next;
+    });
     saveDocument(COLLECTIONS.BRANCHES, newBranch.id, newBranch);
 
     // Initialize branch stock for existing products in Firestore
@@ -499,6 +507,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
         saveDocument(COLLECTIONS.PRODUCTS, p.id, newP);
         return newP;
       });
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
       return updated;
     });
 
@@ -506,28 +515,86 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateBranch = (id: string, data: Partial<Branch>) => {
-    setBranches((prev) =>
-      prev.map((b) => {
+    let updatedBranchObj: Branch | null = null;
+    setBranches((prev) => {
+      const next = prev.map((b) => {
         if (b.id === id) {
-          const updated = { ...b, ...data };
-          saveDocument(COLLECTIONS.BRANCHES, id, updated);
-          return updated;
+          updatedBranchObj = { ...b, ...data };
+          return updatedBranchObj;
         }
         return b;
-      })
-    );
+      });
+      localStorage.setItem(STORAGE_KEYS.BRANCHES, JSON.stringify(next));
+      return next;
+    });
+
+    if (updatedBranchObj) {
+      saveDocument(COLLECTIONS.BRANCHES, id, updatedBranchObj);
+    }
+
+    // Cascade name updates across accounts and active sessions in real time
+    if (data.name && data.name.trim()) {
+      const newName = data.name.trim();
+
+      // Cascade to user accounts
+      setAccounts((prevAccs) => {
+        const next = prevAccs.map((acc) => {
+          if (acc.branchId === id) {
+            const updatedAcc = { ...acc, branchName: newName };
+            saveDocument(COLLECTIONS.ACCOUNTS, acc.id, updatedAcc);
+            return updatedAcc;
+          }
+          return acc;
+        });
+        localStorage.setItem(STORAGE_KEYS.ACCOUNTS, JSON.stringify(next));
+        return next;
+      });
+
+      // Cascade to current active session if applicable
+      setCurrentUser((prevUser) => {
+        if (prevUser && prevUser.branchId === id) {
+          const updatedUser = { ...prevUser, branchName: newName };
+          localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser));
+          return updatedUser;
+        }
+        return prevUser;
+      });
+
+      // Cascade to branch sessions
+      setBranchSessions((prevSessions) => {
+        if (prevSessions[id]) {
+          const updatedSessions = {
+            ...prevSessions,
+            [id]: {
+              ...prevSessions[id],
+              branchName: newName,
+            },
+          };
+          saveDocument(COLLECTIONS.STORE_META, 'active_sessions', { sessions: updatedSessions });
+          localStorage.setItem(STORAGE_KEYS.BRANCH_SESSIONS, JSON.stringify(updatedSessions));
+          return updatedSessions;
+        }
+        return prevSessions;
+      });
+    }
   };
 
   const deleteBranch = (id: string): boolean => {
     const target = branches.find((b) => b.id === id);
     if (!target || target.isHeadBranch) return false;
 
-    setBranches((prev) => prev.filter((b) => b.id !== id));
+    setBranches((prev) => {
+      const next = prev.filter((b) => b.id !== id);
+      localStorage.setItem(STORAGE_KEYS.BRANCHES, JSON.stringify(next));
+      return next;
+    });
     deleteDocument(COLLECTIONS.BRANCHES, id);
 
     if (activeBranchId === id) {
       const head = branches.find((b) => b.isHeadBranch) || branches[0];
-      setActiveBranchIdState(head.id);
+      if (head) {
+        setActiveBranchIdState(head.id);
+      }
     }
     return true;
   };

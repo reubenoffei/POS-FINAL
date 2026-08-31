@@ -48,6 +48,7 @@ export const SettingsView: React.FC = () => {
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
   const [branchForm, setBranchForm] = useState({
     name: '',
+    code: '',
     address: '',
     phone: '',
     managerName: '',
@@ -87,6 +88,7 @@ export const SettingsView: React.FC = () => {
     setEditingBranch(null);
     setBranchForm({
       name: '',
+      code: `BR-${(branches.length + 1).toString().padStart(2, '0')}`,
       address: '',
       phone: '',
       managerName: '',
@@ -97,10 +99,11 @@ export const SettingsView: React.FC = () => {
   const handleOpenEditBranch = (b: Branch) => {
     setEditingBranch(b);
     setBranchForm({
-      name: b.name,
-      address: b.address,
-      phone: b.phone,
-      managerName: b.managerName,
+      name: b.name || '',
+      code: b.code || '',
+      address: b.address || '',
+      phone: b.phone || '',
+      managerName: b.managerName || '',
     });
     setIsBranchModalOpen(true);
   };
@@ -112,6 +115,7 @@ export const SettingsView: React.FC = () => {
     if (editingBranch) {
       updateBranch(editingBranch.id, {
         name: branchForm.name.trim(),
+        code: branchForm.code.trim() || editingBranch.code,
         address: branchForm.address.trim(),
         phone: branchForm.phone.trim(),
         managerName: branchForm.managerName.trim(),
@@ -119,12 +123,15 @@ export const SettingsView: React.FC = () => {
     } else {
       addBranch({
         name: branchForm.name.trim(),
+        code: branchForm.code.trim() || `BR-${(branches.length + 1).toString().padStart(2, '0')}`,
         address: branchForm.address.trim() || 'Branch Retail Address',
         phone: branchForm.phone.trim() || '+233 50 000 0000',
         managerName: branchForm.managerName.trim() || 'Assigned Manager',
         isHeadOffice: false,
       });
     }
+    setSavedSuccess(true);
+    setTimeout(() => setSavedSuccess(false), 3000);
     setIsBranchModalOpen(false);
     setEditingBranch(null);
   };
@@ -730,16 +737,28 @@ export const SettingsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSaveBranch} className="p-6 space-y-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Branch Name *</label>
-                <input
-                  type="text"
-                  required
-                  value={branchForm.name}
-                  onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })}
-                  placeholder="e.g. East Legon Retail Hub"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-hidden text-slate-900 font-medium"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block font-semibold text-slate-700 mb-1">Branch Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={branchForm.name}
+                    onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })}
+                    placeholder="e.g. East Legon Retail Hub"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-hidden text-slate-900 font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Branch Code</label>
+                  <input
+                    type="text"
+                    value={branchForm.code}
+                    onChange={(e) => setBranchForm({ ...branchForm, code: e.target.value })}
+                    placeholder="e.g. BR-04"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-hidden text-slate-900 font-mono font-medium uppercase"
+                  />
+                </div>
               </div>
 
               <div>
