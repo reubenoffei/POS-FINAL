@@ -1,0 +1,6 @@
+{
+  "name": "Shop Ledger & Inventory POS",
+  "description": "Comprehensive retail shop management system for sales POS, purchase orders, inventory tracking, supplier ledgers, customer credit, and financial reporting.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
