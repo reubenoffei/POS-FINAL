@@ -24,7 +24,13 @@ import {
   ArrowRightLeft,
   Lock,
   Building2,
+  Printer,
+  Tag,
+  CheckSquare,
+  Square,
+  Copy,
 } from 'lucide-react';
+import { printBarcodeLabels, BarcodePaperMode, generateBarcodeSvgString } from '../lib/printUtils';
 
 export const StockView: React.FC = () => {
   const {
@@ -46,6 +52,7 @@ export const StockView: React.FC = () => {
     exportStockCSV,
     formatCurrency,
     getProductBranchStock,
+    settings,
   } = useShop();
 
   const calculateMargin = (cost: number, sell: number) => {
@@ -86,6 +93,17 @@ export const StockView: React.FC = () => {
     supplierId: '',
     description: '',
   });
+
+  // Barcode Printing Studio State
+  const [barcodePaperMode, setBarcodePaperMode] = useState<BarcodePaperMode>('thermal_roll');
+  const [selectedBarcodeIds, setSelectedBarcodeIds] = useState<string[]>([]);
+  const [barcodeCopiesMap, setBarcodeCopiesMap] = useState<Record<string, number>>({});
+  const [globalLabelCopies, setGlobalLabelCopies] = useState<number>(1);
+  const [barcodeShowPrice, setBarcodeShowPrice] = useState<boolean>(true);
+  const [barcodeShowSku, setBarcodeShowSku] = useState<boolean>(true);
+  const [barcodeSearchTerm, setBarcodeSearchTerm] = useState<string>('');
+  const [isPrintingBarcodes, setIsPrintingBarcodes] = useState<boolean>(false);
+  const [barcodePrintSuccess, setBarcodePrintSuccess] = useState<boolean>(false);
 
   // Stock Adjustment Form state
   const [adjNewStock, setAdjNewStock] = useState<number>(0);
@@ -273,6 +291,78 @@ export const StockView: React.FC = () => {
     } else {
       alert(res.message || 'Transfer failed');
     }
+  };
+
+  // Barcode Printing Helpers
+  const handleToggleSelectBarcode = (id: string) => {
+    setSelectedBarcodeIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAllBarcodes = () => {
+    setSelectedBarcodeIds(products.map((p) => p.id));
+  };
+
+  const handleDeselectAllBarcodes = () => {
+    setSelectedBarcodeIds([]);
+  };
+
+  const handleSetCopiesForProduct = (id: string, count: number) => {
+    setBarcodeCopiesMap((prev) => ({
+      ...prev,
+      [id]: Math.max(1, count),
+    }));
+  };
+
+  const handleApplyGlobalCopies = () => {
+    const map: Record<string, number> = {};
+    products.forEach((p) => {
+      map[p.id] = globalLabelCopies;
+    });
+    setBarcodeCopiesMap(map);
+  };
+
+  const handlePrintBarcodes = async (productsToPrint?: Product[], customCopies?: Record<string, number>) => {
+    const targetProducts = productsToPrint || (
+      selectedBarcodeIds.length > 0
+        ? products.filter((p) => selectedBarcodeIds.includes(p.id))
+        : products
+    );
+
+    if (targetProducts.length === 0) {
+      alert('Please select at least one product to print barcode labels.');
+      return;
+    }
+
+    setIsPrintingBarcodes(true);
+    try {
+      await printBarcodeLabels(targetProducts, formatCurrency, {
+        mode: barcodePaperMode,
+        copiesPerProduct: customCopies || barcodeCopiesMap,
+        defaultCopies: globalLabelCopies,
+        showPrice: barcodeShowPrice,
+        showSku: barcodeShowSku,
+        shopName: settings.shopName || 'Retail Store',
+      });
+      setBarcodePrintSuccess(true);
+      setTimeout(() => setBarcodePrintSuccess(false), 3000);
+    } catch (err) {
+      console.error('Barcode print error:', err);
+    } finally {
+      setIsPrintingBarcodes(false);
+    }
+  };
+
+  const handleQuickPrintSingleProductBarcode = (product: Product) => {
+    printBarcodeLabels([product], formatCurrency, {
+      mode: barcodePaperMode,
+      copiesPerProduct: { [product.id]: 1 },
+      defaultCopies: 1,
+      showPrice: true,
+      showSku: true,
+      shopName: settings.shopName || 'Retail Store',
+    });
   };
 
   return (
@@ -610,6 +700,14 @@ export const StockView: React.FC = () => {
                         <td className="py-3 px-4 text-right">
                           <div className="inline-flex items-center gap-1">
                             <button
+                              onClick={() => handleQuickPrintSingleProductBarcode(p)}
+                              className="px-2 py-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md border border-slate-200 transition-colors inline-flex items-center gap-1"
+                              title="Print Thermal Barcode Label for this Product"
+                            >
+                              <Tag className="w-3 h-3 text-indigo-600" />
+                              <span className="hidden xl:inline">Label</span>
+                            </button>
+                            <button
                               onClick={() => handleOpenAdjustModal(p)}
                               className="px-2 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-md border border-indigo-200 transition-colors"
                               title="Adjust Stock Quantity at Current Branch"
@@ -877,44 +975,266 @@ export const StockView: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 3: PRINTABLE BARCODE SHEET */}
+      {/* TAB 3: PRINTABLE BARCODE SHEET & THERMAL LABEL STUDIO */}
       {activeTab === 'barcodes' && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-4">
-          <div className="flex items-center justify-between">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-6">
+          
+          {/* Header and Mode Selector */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
             <div>
-              <h3 className="font-bold text-slate-900 text-sm">Product Barcode Labels Sheet</h3>
-              <p className="text-xs text-slate-500">
-                Ready for thermal sticker sheets or standard A4 label printing.
+              <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                <BarcodeIcon className="w-5 h-5 text-indigo-600" />
+                Barcode & Price Label Printing Studio
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Generate crisp, scannable Code128 barcode labels for thermal sticker rolls or standard A4 sheet grids.
               </p>
             </div>
-            <button
-              onClick={() => window.print()}
-              className="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors"
-            >
-              Print Labels
-            </button>
+
+            {/* Paper format selector */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setBarcodePaperMode('thermal_roll')}
+                  className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    barcodePaperMode === 'thermal_roll'
+                      ? 'bg-white text-indigo-700 shadow-xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Tag className="w-3.5 h-3.5" />
+                  Thermal Label Roll (58mm/Continuous)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBarcodePaperMode('a4_labels')}
+                  className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                    barcodePaperMode === 'a4_labels'
+                      ? 'bg-white text-indigo-700 shadow-xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  Standard A4 Sheet (3x8 Grid)
+                </button>
+              </div>
+
+              <button
+                onClick={() => handlePrintBarcodes()}
+                disabled={isPrintingBarcodes}
+                className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:opacity-50 rounded-xl shadow-sm transition-all flex items-center gap-2"
+              >
+                {barcodePrintSuccess ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-300" />
+                    Sent to Printer!
+                  </>
+                ) : (
+                  <>
+                    <Printer className="w-4 h-4" />
+                    {isPrintingBarcodes ? 'Preparing Labels...' : 'Print Barcode Labels'}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
-            {products.map((prod) => (
-              <div
-                key={prod.id}
-                className="bg-white p-3 rounded-lg border border-slate-300 flex flex-col items-center text-center font-mono-code"
+          {/* Configuration & Controls Toolbar */}
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row flex-wrap gap-4 items-stretch md:items-center justify-between text-xs">
+            
+            {/* Search within Barcode Studio */}
+            <div className="relative flex-1 min-w-[200px] max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={barcodeSearchTerm}
+                onChange={(e) => setBarcodeSearchTerm(e.target.value)}
+                placeholder="Filter products to label..."
+                className="w-full pl-9 pr-3 py-1.5 bg-white border border-slate-300 rounded-lg text-slate-800 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+              />
+            </div>
+
+            {/* Quick selection actions */}
+            <div className="flex flex-wrap items-center gap-2 text-slate-700">
+              <button
+                type="button"
+                onClick={handleSelectAllBarcodes}
+                className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 font-semibold text-slate-700 flex items-center gap-1.5"
               >
-                <div className="text-[10px] font-bold text-slate-800 line-clamp-1">
-                  {prod.name}
-                </div>
-                <div className="text-[12px] font-extrabold text-indigo-700 my-1">
-                  {formatCurrency(prod.sellingPrice)}
-                </div>
-                <div className="text-slate-950 font-bold tracking-[0.2em] text-sm my-0.5">
-                  ||| | |||| | |||
-                </div>
-                <div className="text-[9px] text-slate-500">{prod.barcode}</div>
-                <div className="text-[9px] text-slate-400">SKU: {prod.sku}</div>
-              </div>
-            ))}
+                <CheckSquare className="w-3.5 h-3.5 text-indigo-600" />
+                Select All ({products.length})
+              </button>
+              <button
+                type="button"
+                onClick={handleDeselectAllBarcodes}
+                className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 font-semibold text-slate-700 flex items-center gap-1.5"
+              >
+                <Square className="w-3.5 h-3.5 text-slate-400" />
+                Clear
+              </button>
+            </div>
+
+            {/* Global Copies Batch Stepper */}
+            <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-lg border border-slate-300">
+              <span className="font-semibold text-slate-700">Copies/Product:</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={globalLabelCopies}
+                onChange={(e) => setGlobalLabelCopies(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-12 text-center py-0.5 border border-slate-300 rounded-md font-bold text-slate-900"
+              />
+              <button
+                type="button"
+                onClick={handleApplyGlobalCopies}
+                className="px-2 py-0.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md font-bold text-[11px]"
+              >
+                Apply to All
+              </button>
+            </div>
+
+            {/* Display Toggles */}
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 cursor-pointer font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={barcodeShowPrice}
+                  onChange={(e) => setBarcodeShowPrice(e.target.checked)}
+                  className="rounded-sm text-indigo-600 focus:ring-indigo-500"
+                />
+                Show Price
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={barcodeShowSku}
+                  onChange={(e) => setBarcodeShowSku(e.target.checked)}
+                  className="rounded-sm text-indigo-600 focus:ring-indigo-500"
+                />
+                Show SKU
+              </label>
+            </div>
+
           </div>
+
+          {/* Selected Summary */}
+          <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+            <span>
+              Selected: <strong className="text-slate-900">
+                {selectedBarcodeIds.length === 0 ? products.length : selectedBarcodeIds.length} of {products.length} products
+              </strong>
+              {selectedBarcodeIds.length === 0 && ' (All will be printed)'}
+            </span>
+            <span className="text-indigo-600 font-semibold">
+              Mode: {barcodePaperMode === 'thermal_roll' ? 'Continuous Thermal Roll (58mm)' : 'Standard A4 Multi-label Grid'}
+            </span>
+          </div>
+
+          {/* Product Label Preview Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-4 bg-slate-50/70 rounded-xl border border-slate-200 max-h-[600px] overflow-y-auto">
+            {products
+              .filter((p) => {
+                if (!barcodeSearchTerm) return true;
+                const q = barcodeSearchTerm.toLowerCase();
+                return (
+                  p.name.toLowerCase().includes(q) ||
+                  p.sku.toLowerCase().includes(q) ||
+                  p.barcode.toLowerCase().includes(q)
+                );
+              })
+              .map((prod) => {
+                const isSelected = selectedBarcodeIds.length === 0 || selectedBarcodeIds.includes(prod.id);
+                const copies = barcodeCopiesMap[prod.id] ?? globalLabelCopies;
+                const barcodeSvgHtml = generateBarcodeSvgString(prod.barcode || prod.sku, {
+                  height: 28,
+                  width: 1.2,
+                  fontSize: 9,
+                });
+
+                return (
+                  <div
+                    key={prod.id}
+                    className={`bg-white p-3.5 rounded-xl border transition-all flex flex-col justify-between relative shadow-2xs ${
+                      isSelected
+                        ? 'border-indigo-500 ring-2 ring-indigo-500/20'
+                        : 'border-slate-200 opacity-60 hover:opacity-90'
+                    }`}
+                  >
+                    {/* Checkbox and Title */}
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedBarcodeIds.includes(prod.id)}
+                          onChange={() => handleToggleSelectBarcode(prod.id)}
+                          className="mt-0.5 rounded-sm text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <div>
+                          <div className="text-xs font-bold text-slate-900 line-clamp-1" title={prod.name}>
+                            {prod.name}
+                          </div>
+                          {barcodeShowSku && (
+                            <div className="text-[10px] text-slate-400 font-mono-code">SKU: {prod.sku}</div>
+                          )}
+                        </div>
+                      </div>
+
+                      {barcodeShowPrice && (
+                        <div className="text-xs font-extrabold text-indigo-700 shrink-0">
+                          {formatCurrency(prod.sellingPrice)}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Scaled Barcode SVG Preview */}
+                    <div
+                      className="my-1.5 flex justify-center items-center overflow-hidden bg-slate-50 p-1 rounded-lg border border-slate-100"
+                      dangerouslySetInnerHTML={{ __html: barcodeSvgHtml }}
+                    />
+
+                    {/* Label Quantity Controls */}
+                    <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-slate-400 font-medium">Qty:</span>
+                        <div className="flex items-center border border-slate-200 rounded-md overflow-hidden bg-white">
+                          <button
+                            type="button"
+                            onClick={() => handleSetCopiesForProduct(prod.id, copies - 1)}
+                            className="px-1.5 py-0.5 text-slate-600 hover:bg-slate-100 font-bold"
+                          >
+                            -
+                          </button>
+                          <span className="px-2 py-0.5 font-bold text-slate-900 text-xs min-w-[20px] text-center">
+                            {copies}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleSetCopiesForProduct(prod.id, copies + 1)}
+                            className="px-1.5 py-0.5 text-slate-600 hover:bg-slate-100 font-bold"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleQuickPrintSingleProductBarcode(prod)}
+                        className="px-2 py-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors flex items-center gap-1"
+                        title="Print single test label"
+                      >
+                        <Printer className="w-3 h-3" />
+                        Print 1
+                      </button>
+                    </div>
+
+                  </div>
+                );
+              })}
+          </div>
+
         </div>
       )}
 

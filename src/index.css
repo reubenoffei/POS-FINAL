@@ -31,32 +31,22 @@
   background: #94a3b8;
 }
 
-/* Thermal receipt print layout */
+/* Thermal and clean print layouts */
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  
-  #printable-receipt,
-  #printable-receipt * {
-    visibility: visible;
-  }
-  
-  #printable-receipt {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 80mm !important;
-    max-width: 80mm !important;
-    margin: 0;
-    padding: 8px !important;
-    background: #ffffff !important;
-    color: #000000 !important;
-    box-shadow: none !important;
-    font-size: 11px !important;
-  }
-
   .no-print {
     display: none !important;
   }
+
+  @page {
+    margin: 4mm;
+    size: auto;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 }
+
