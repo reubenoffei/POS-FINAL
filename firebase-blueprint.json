@@ -1,0 +1,129 @@
+{
+  "entities": {
+    "products": {
+      "title": "Products & Inventory",
+      "description": "Stock products with quantities, barcodes, prices, and multi-branch stock levels",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "barcode": { "type": "string" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "stock": { "type": "number" },
+        "minStockLevel": { "type": "number" },
+        "unit": { "type": "string" },
+        "branchId": { "type": "string" },
+        "branchName": { "type": "string" },
+        "branchStocks": { "type": "object" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "sellingPrice", "stock"]
+    },
+    "sales": {
+      "title": "Sales Transactions",
+      "description": "Real-time sales invoices and receipts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "receiptNo": { "type": "string" },
+        "date": { "type": "string" },
+        "branchId": { "type": "string" },
+        "branchName": { "type": "string" },
+        "cashierName": { "type": "string" },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "discount": { "type": "number" },
+        "tax": { "type": "number" },
+        "total": { "type": "number" },
+        "amountPaid": { "type": "number" },
+        "changeDue": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "receiptNo", "total", "items", "date"]
+    },
+    "branches": {
+      "title": "Retail Branches",
+      "description": "Branches / retail store locations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "managerName": { "type": "string" },
+        "isHeadBranch": { "type": "boolean" },
+        "color": { "type": "string" }
+      },
+      "required": ["id", "name", "code"]
+    },
+    "customers": {
+      "title": "Customers & Debtors",
+      "description": "Customer profiles, store credit, and ledger balance",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "branchId": { "type": "string" },
+        "outstandingBalance": { "type": "number" },
+        "totalPurchases": { "type": "number" },
+        "creditLimit": { "type": "number" }
+      },
+      "required": ["id", "name"]
+    },
+    "purchases": {
+      "title": "Purchases & Stock In",
+      "description": "Stock replenishment orders from suppliers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderNumber": { "type": "string" },
+        "date": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "branchId": { "type": "string" },
+        "branchName": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "orderNumber", "total"]
+    },
+    "transfers": {
+      "title": "Branch Stock Transfers",
+      "description": "Inter-branch stock transfer records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "transferNumber": { "type": "string" },
+        "date": { "type": "string" },
+        "sourceBranchId": { "type": "string" },
+        "sourceBranchName": { "type": "string" },
+        "targetBranchId": { "type": "string" },
+        "targetBranchName": { "type": "string" },
+        "items": { "type": "array" },
+        "status": { "type": "string" },
+        "initiatedBy": { "type": "string" }
+      },
+      "required": ["id", "transferNumber"]
+    },
+    "store_meta": {
+      "title": "Store Settings & Real-time State",
+      "description": "Global shop profile, active sessions, and multi-branch configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "settings": { "type": "object" },
+        "branchSessions": { "type": "object" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestoreRules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}"
+}

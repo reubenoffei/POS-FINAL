@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   Product,
   Sale,
@@ -12,8 +12,7 @@ import {
   PaymentMethod,
   Branch,
   UserAccount,
-  UserRole,
-  BranchSession
+  BranchSession,
 } from '../types';
 import {
   initialSettings,
@@ -27,6 +26,15 @@ import {
   initialBranches,
   initialAccounts,
 } from '../data/initialData';
+import {
+  COLLECTIONS,
+  subscribeToCollection,
+  subscribeToDoc,
+  saveDocument,
+  updateDocument,
+  deleteDocument,
+  seedInitialFirestoreData,
+} from '../lib/firestoreSync';
 
 interface ShopContextType {
   products: Product[];
@@ -62,8 +70,8 @@ interface ShopContextType {
   // RBAC permissions helpers
   isOwner: boolean;
   isHeadBranch: boolean;
-  canManageStock: boolean; // Owner exclusive right
-  canDeleteStock: boolean; // Owner exclusive right
+  canManageStock: boolean;
+  canDeleteStock: boolean;
   
   // Multi-branch stock helper
   getProductBranchStock: (product: Product, branchId?: string) => number;
@@ -147,6 +155,9 @@ interface ShopContextType {
   exportStockCSV: () => void;
   exportPurchasesCSV: () => void;
   
+  // Real-time Cloud Sync Status
+  isCloudSynced: boolean;
+
   // Calculated helpers
   lowStockProducts: Product[];
   totalStockCostValue: number;
@@ -159,19 +170,19 @@ interface ShopContextType {
 const ShopContext = createContext<ShopContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  PRODUCTS: 'shop_pos_products_v2',
-  SALES: 'shop_pos_sales_v2',
-  PURCHASES: 'shop_pos_purchases_v2',
-  SUPPLIERS: 'shop_pos_suppliers_v2',
-  CUSTOMERS: 'shop_pos_customers_v2',
-  EXPENSES: 'shop_pos_expenses_v2',
-  ADJUSTMENTS: 'shop_pos_adjustments_v2',
-  SETTINGS: 'shop_pos_settings_v2',
-  BRANCHES: 'shop_pos_branches_v2',
-  ACCOUNTS: 'shop_pos_accounts_v2',
-  CURRENT_USER: 'shop_pos_user_v2',
-  ACTIVE_BRANCH: 'shop_pos_active_branch_v2',
-  BRANCH_SESSIONS: 'shop_pos_branch_sessions_v2',
+  PRODUCTS: 'shop_pos_products_v3',
+  SALES: 'shop_pos_sales_v3',
+  PURCHASES: 'shop_pos_purchases_v3',
+  SUPPLIERS: 'shop_pos_suppliers_v3',
+  CUSTOMERS: 'shop_pos_customers_v3',
+  EXPENSES: 'shop_pos_expenses_v3',
+  ADJUSTMENTS: 'shop_pos_adjustments_v3',
+  SETTINGS: 'shop_pos_settings_v3',
+  BRANCHES: 'shop_pos_branches_v3',
+  ACCOUNTS: 'shop_pos_accounts_v3',
+  CURRENT_USER: 'shop_pos_user_v3',
+  ACTIVE_BRANCH: 'shop_pos_active_branch_v3',
+  BRANCH_SESSIONS: 'shop_pos_branch_sessions_v3',
 };
 
 export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -206,7 +217,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return null;
       }
     }
-    return null; // Require explicit login & branch choice at start
+    return null;
   });
 
   const [activeBranchId, setActiveBranchIdState] = useState<string>(() => {
@@ -255,15 +266,177 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved ? JSON.parse(saved) : initialStockAdjustments;
   });
 
-  // LocalStorage sync
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.BRANCHES, JSON.stringify(branches));
-  }, [branches]);
+  const [isCloudSynced, setIsCloudSynced] = useState<boolean>(true);
+  const initialBootstrapRef = useRef<boolean>(false);
 
+  // --- FIREBASE REAL-TIME LISTENERS ---
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ACCOUNTS, JSON.stringify(accounts));
-  }, [accounts]);
+    // 1. Products Real-time Listener
+    const unsubProducts = subscribeToCollection<Product>(
+      COLLECTIONS.PRODUCTS,
+      (remoteProducts) => {
+        if (remoteProducts.length > 0) {
+          // Sort by name or creation
+          setProducts(remoteProducts);
+          localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(remoteProducts));
+        } else if (!initialBootstrapRef.current) {
+          // If remote empty, bootstrap initial data
+          initialBootstrapRef.current = true;
+          seedInitialFirestoreData({
+            branches,
+            accounts,
+            settings,
+            products,
+            suppliers,
+            customers,
+            sales,
+            purchases,
+            expenses,
+            stockAdjustments,
+          });
+        }
+      }
+    );
 
+    // 2. Sales Real-time Listener
+    const unsubSales = subscribeToCollection<Sale>(
+      COLLECTIONS.SALES,
+      (remoteSales) => {
+        if (remoteSales.length > 0) {
+          const sorted = [...remoteSales].sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+          setSales(sorted);
+          localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(sorted));
+        }
+      }
+    );
+
+    // 3. Purchases Real-time Listener
+    const unsubPurchases = subscribeToCollection<Purchase>(
+      COLLECTIONS.PURCHASES,
+      (remotePurchases) => {
+        if (remotePurchases.length > 0) {
+          const sorted = [...remotePurchases].sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+          setPurchases(sorted);
+          localStorage.setItem(STORAGE_KEYS.PURCHASES, JSON.stringify(sorted));
+        }
+      }
+    );
+
+    // 4. Customers Real-time Listener
+    const unsubCustomers = subscribeToCollection<Customer>(
+      COLLECTIONS.CUSTOMERS,
+      (remoteCustomers) => {
+        if (remoteCustomers.length > 0) {
+          setCustomers(remoteCustomers);
+          localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(remoteCustomers));
+        }
+      }
+    );
+
+    // 5. Suppliers Real-time Listener
+    const unsubSuppliers = subscribeToCollection<Supplier>(
+      COLLECTIONS.SUPPLIERS,
+      (remoteSuppliers) => {
+        if (remoteSuppliers.length > 0) {
+          setSuppliers(remoteSuppliers);
+          localStorage.setItem(STORAGE_KEYS.SUPPLIERS, JSON.stringify(remoteSuppliers));
+        }
+      }
+    );
+
+    // 6. Expenses Real-time Listener
+    const unsubExpenses = subscribeToCollection<Expense>(
+      COLLECTIONS.EXPENSES,
+      (remoteExpenses) => {
+        if (remoteExpenses.length > 0) {
+          const sorted = [...remoteExpenses].sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+          setExpenses(sorted);
+          localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(sorted));
+        }
+      }
+    );
+
+    // 7. Stock Adjustments Real-time Listener
+    const unsubAdjustments = subscribeToCollection<StockAdjustment>(
+      COLLECTIONS.ADJUSTMENTS,
+      (remoteAdj) => {
+        if (remoteAdj.length > 0) {
+          const sorted = [...remoteAdj].sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+          setStockAdjustments(sorted);
+          localStorage.setItem(STORAGE_KEYS.ADJUSTMENTS, JSON.stringify(sorted));
+        }
+      }
+    );
+
+    // 8. Branches Real-time Listener
+    const unsubBranches = subscribeToCollection<Branch>(
+      COLLECTIONS.BRANCHES,
+      (remoteBranches) => {
+        if (remoteBranches.length > 0) {
+          setBranches(remoteBranches);
+          localStorage.setItem(STORAGE_KEYS.BRANCHES, JSON.stringify(remoteBranches));
+        }
+      }
+    );
+
+    // 9. Accounts Real-time Listener
+    const unsubAccounts = subscribeToCollection<UserAccount>(
+      COLLECTIONS.ACCOUNTS,
+      (remoteAccounts) => {
+        if (remoteAccounts.length > 0) {
+          setAccounts(remoteAccounts);
+          localStorage.setItem(STORAGE_KEYS.ACCOUNTS, JSON.stringify(remoteAccounts));
+        }
+      }
+    );
+
+    // 10. Store Settings & Sessions Real-time Listener
+    const unsubSettings = subscribeToDoc<ShopSettings>(
+      COLLECTIONS.STORE_META,
+      'global_settings',
+      (remoteSettings) => {
+        if (remoteSettings) {
+          setSettings(remoteSettings);
+          localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(remoteSettings));
+        }
+      }
+    );
+
+    const unsubSessions = subscribeToDoc<{ sessions: Record<string, BranchSession> }>(
+      COLLECTIONS.STORE_META,
+      'active_sessions',
+      (docData) => {
+        if (docData && docData.sessions) {
+          setBranchSessions(docData.sessions);
+          localStorage.setItem(STORAGE_KEYS.BRANCH_SESSIONS, JSON.stringify(docData.sessions));
+        }
+      }
+    );
+
+    return () => {
+      unsubProducts();
+      unsubSales();
+      unsubPurchases();
+      unsubCustomers();
+      unsubSuppliers();
+      unsubExpenses();
+      unsubAdjustments();
+      unsubBranches();
+      unsubAccounts();
+      unsubSettings();
+      unsubSessions();
+    };
+  }, []);
+
+  // Offline / Fallback LocalStorage sync for user session
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(currentUser));
@@ -273,44 +446,8 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [currentUser]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.BRANCH_SESSIONS, JSON.stringify(branchSessions));
-  }, [branchSessions]);
-
-  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.ACTIVE_BRANCH, activeBranchId);
   }, [activeBranchId]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
-  }, [products]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(sales));
-  }, [sales]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.PURCHASES, JSON.stringify(purchases));
-  }, [purchases]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.SUPPLIERS, JSON.stringify(suppliers));
-  }, [suppliers]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
-  }, [customers]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses));
-  }, [expenses]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ADJUSTMENTS, JSON.stringify(stockAdjustments));
-  }, [stockAdjustments]);
 
   // Derived Active Branch
   const activeBranch = branches.find((b) => b.id === activeBranchId) || branches[0] || initialBranches[0];
@@ -318,16 +455,16 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // RBAC Permissions
   const isOwner = currentUser?.role === 'owner';
   const isHeadBranch = activeBranch?.isHeadBranch === true;
-  const canManageStock = isOwner; // Owner at head branch has exclusive right
+  const canManageStock = isOwner;
   const canDeleteStock = isOwner;
 
-  // Active Branch Switcher (restricted if shopkeeper)
+  // Active Branch Switcher
   const setActiveBranchId = (id: string) => {
     const targetBranch = branches.find((b) => b.id === id);
     if (!targetBranch) return;
 
     if (!isOwner && currentUser && currentUser.branchId !== id) {
-      alert(`As a shopkeeper, you are restricted to operating in ${currentUser.branchName}.`);
+      alert(`As a shopkeeper, you are assigned to ${currentUser.branchName}.`);
       return;
     }
     setActiveBranchIdState(id);
@@ -339,7 +476,6 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (product.branchStock && product.branchStock[targetId] !== undefined) {
       return product.branchStock[targetId];
     }
-    // Fallback if branchStock not populated: for head branch return product.stock, for others 0
     return targetId === 'branch-head' ? product.stock : 0;
   };
 
@@ -353,40 +489,50 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: new Date().toISOString(),
     };
     setBranches((prev) => [...prev, newBranch]);
+    saveDocument(COLLECTIONS.BRANCHES, newBranch.id, newBranch);
 
-    // Initialize branch stock for existing products
-    setProducts((prevProds) =>
-      prevProds.map((p) => ({
-        ...p,
-        branchStock: {
-          ...(p.branchStock || {}),
-          [newBranch.id]: 0,
-        },
-      }))
-    );
+    // Initialize branch stock for existing products in Firestore
+    setProducts((prevProds) => {
+      const updated = prevProds.map((p) => {
+        const branchStock = { ...(p.branchStock || {}), [newBranch.id]: 0 };
+        const newP = { ...p, branchStock };
+        saveDocument(COLLECTIONS.PRODUCTS, p.id, newP);
+        return newP;
+      });
+      return updated;
+    });
 
     return newBranch;
   };
 
   const updateBranch = (id: string, data: Partial<Branch>) => {
     setBranches((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, ...data } : b))
+      prev.map((b) => {
+        if (b.id === id) {
+          const updated = { ...b, ...data };
+          saveDocument(COLLECTIONS.BRANCHES, id, updated);
+          return updated;
+        }
+        return b;
+      })
     );
   };
 
   const deleteBranch = (id: string): boolean => {
     const target = branches.find((b) => b.id === id);
-    if (!target || target.isHeadBranch) {
-      return false; // Head branch cannot be deleted
-    }
+    if (!target || target.isHeadBranch) return false;
+
     setBranches((prev) => prev.filter((b) => b.id !== id));
+    deleteDocument(COLLECTIONS.BRANCHES, id);
+
     if (activeBranchId === id) {
-      setActiveBranchIdState(initialBranches[0].id);
+      const head = branches.find((b) => b.isHeadBranch) || branches[0];
+      setActiveBranchIdState(head.id);
     }
     return true;
   };
 
-  // User Accounts & Authentication with Branch Claim & Occupancy Management
+  // User Accounts & Authentication
   const isBranchOccupied = (branchId: string, currentUserId?: string) => {
     const session = branchSessions[branchId];
     if (!session) {
@@ -419,7 +565,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, message: 'Selected branch does not exist.' };
     }
 
-    // Update branch sessions for live status awareness
+    // Update branch sessions for live cashier status awareness in Firestore
     const updatedSessions = { ...branchSessions };
     Object.keys(updatedSessions).forEach((bId) => {
       if (updatedSessions[bId]?.userId === acc.id) {
@@ -427,7 +573,6 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     });
 
-    // Register this user's active branch session
     updatedSessions[targetBranchId] = {
       branchId: targetBranchId,
       branchName: targetBranch.name,
@@ -437,6 +582,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       claimedAt: new Date().toISOString(),
     };
     setBranchSessions(updatedSessions);
+    saveDocument(COLLECTIONS.STORE_META, 'active_sessions', { sessions: updatedSessions });
 
     const updatedUser: UserAccount = {
       ...acc,
@@ -459,6 +605,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setBranchSessions((prev) => {
       const next = { ...prev };
       delete next[branchId];
+      saveDocument(COLLECTIONS.STORE_META, 'active_sessions', { sessions: next });
       return next;
     });
     if (currentUser?.branchId === branchId) {
@@ -471,6 +618,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setBranchSessions((prev) => {
         const next = { ...prev };
         delete next[currentUser.branchId];
+        saveDocument(COLLECTIONS.STORE_META, 'active_sessions', { sessions: next });
         return next;
       });
     }
@@ -484,12 +632,20 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: new Date().toISOString(),
     };
     setAccounts((prev) => [...prev, newAcc]);
+    saveDocument(COLLECTIONS.ACCOUNTS, newAcc.id, newAcc);
     return newAcc;
   };
 
   const updateAccount = (id: string, data: Partial<UserAccount>) => {
     setAccounts((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, ...data } : a))
+      prev.map((a) => {
+        if (a.id === id) {
+          const updated = { ...a, ...data };
+          saveDocument(COLLECTIONS.ACCOUNTS, id, updated);
+          return updated;
+        }
+        return a;
+      })
     );
     if (currentUser?.id === id) {
       setCurrentUser((prev) => (prev ? { ...prev, ...data } : null));
@@ -500,9 +656,10 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (accounts.length <= 1) return false;
     const target = accounts.find((a) => a.id === id);
     if (target?.role === 'owner' && accounts.filter((a) => a.role === 'owner').length <= 1) {
-      return false; // Preserve at least one owner
+      return false;
     }
     setAccounts((prev) => prev.filter((a) => a.id !== id));
+    deleteDocument(COLLECTIONS.ACCOUNTS, id);
     return true;
   };
 
@@ -526,25 +683,23 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const fromBranch = branches.find((b) => b.id === fromBranchId);
     const toBranch = branches.find((b) => b.id === toBranchId);
 
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.id !== productId) return p;
-        const currentBranchStock = { ...(p.branchStock || {}) };
-        const newFromStock = Math.max(0, (currentBranchStock[fromBranchId] || 0) - quantity);
-        const newToStock = (currentBranchStock[toBranchId] || 0) + quantity;
+    const currentBranchStock = { ...(product.branchStock || {}) };
+    const newFromStock = Math.max(0, (currentBranchStock[fromBranchId] || 0) - quantity);
+    const newToStock = (currentBranchStock[toBranchId] || 0) + quantity;
 
-        currentBranchStock[fromBranchId] = newFromStock;
-        currentBranchStock[toBranchId] = newToStock;
+    currentBranchStock[fromBranchId] = newFromStock;
+    currentBranchStock[toBranchId] = newToStock;
 
-        return {
-          ...p,
-          branchStock: currentBranchStock,
-          updatedAt: new Date().toISOString(),
-        };
-      })
-    );
+    const updatedProduct: Product = {
+      ...product,
+      branchStock: currentBranchStock,
+      updatedAt: new Date().toISOString(),
+    };
 
-    // Record Stock Adjustment Log
+    setProducts((prev) => prev.map((p) => (p.id === productId ? updatedProduct : p)));
+    saveDocument(COLLECTIONS.PRODUCTS, productId, updatedProduct);
+
+    // Record Stock Adjustment Log in Firestore
     const newAdj: StockAdjustment = {
       id: `adj-${Date.now()}`,
       productId,
@@ -562,6 +717,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     setStockAdjustments((prev) => [newAdj, ...prev]);
+    saveDocument(COLLECTIONS.ADJUSTMENTS, newAdj.id, newAdj);
     return true;
   };
 
@@ -601,20 +757,21 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     setProducts((prev) => [newProduct, ...prev]);
+    saveDocument(COLLECTIONS.PRODUCTS, newProduct.id, newProduct);
     return newProduct;
   };
 
   const updateProduct = (id: string, updatedFields: Partial<Product>) => {
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.id !== id) return p;
-        const updated = { ...p, ...updatedFields, updatedAt: new Date().toISOString() };
-        if (updated.branchStock) {
-          updated.stock = Object.values(updated.branchStock).reduce((a: number, b: number) => a + (Number(b) || 0), 0);
-        }
-        return updated;
-      })
-    );
+    const target = products.find((p) => p.id === id);
+    if (!target) return;
+
+    const updated = { ...target, ...updatedFields, updatedAt: new Date().toISOString() };
+    if (updated.branchStock) {
+      updated.stock = Object.values(updated.branchStock).reduce((a: number, b: number) => a + (Number(b) || 0), 0);
+    }
+
+    setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));
+    saveDocument(COLLECTIONS.PRODUCTS, id, updated);
   };
 
   const deleteProduct = (id: string): boolean => {
@@ -623,10 +780,11 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return false;
     }
     setProducts((prev) => prev.filter((p) => p.id !== id));
+    deleteDocument(COLLECTIONS.PRODUCTS, id);
     return true;
   };
 
-  // Record Sale & Decrement Branch Stock
+  // Record Sale & Decrement Branch Stock in Real-time Cloud Firestore
   const recordSale = (saleData: {
     customerId?: string;
     customerName: string;
@@ -648,7 +806,6 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const randNum = Math.floor(1000 + Math.random() * 9000);
     const receiptNo = `REC-${dateStr}-${randNum}`;
 
-    // Calculate total cost & profit
     const costTotal = saleData.items.reduce((acc, item) => acc + item.costPrice * item.quantity, 0);
     const profit = Math.max(0, saleData.grandTotal - saleData.taxAmount - costTotal);
     const balanceDue = Math.max(0, saleData.grandTotal - saleData.amountPaid);
@@ -686,48 +843,47 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       date: now.toISOString(),
     };
 
-    // 1. Decrement Stock from current branch AND total stock
-    setProducts((prevProducts) =>
-      prevProducts.map((product) => {
-        const soldItem = saleData.items.find((item) => item.productId === product.id);
-        if (soldItem) {
-          const currentBranchStockMap = { ...(product.branchStock || {}) };
-          const prevBranchQty = currentBranchStockMap[activeBranchId] ?? product.stock;
-          const newBranchQty = Math.max(0, prevBranchQty - soldItem.quantity);
-          currentBranchStockMap[activeBranchId] = newBranchQty;
+    // 1. Decrement Stock from current branch AND total stock in Firestore
+    saleData.items.forEach((soldItem) => {
+      const product = products.find((p) => p.id === soldItem.productId);
+      if (product) {
+        const currentBranchStockMap = { ...(product.branchStock || {}) };
+        const prevBranchQty = currentBranchStockMap[activeBranchId] ?? product.stock;
+        const newBranchQty = Math.max(0, prevBranchQty - soldItem.quantity);
+        currentBranchStockMap[activeBranchId] = newBranchQty;
+        const newTotalStock = Math.max(0, product.stock - soldItem.quantity);
 
-          const newTotalStock = Math.max(0, product.stock - soldItem.quantity);
+        const updatedProd: Product = {
+          ...product,
+          stock: newTotalStock,
+          branchStock: currentBranchStockMap,
+          updatedAt: new Date().toISOString(),
+        };
 
-          return {
-            ...product,
-            stock: newTotalStock,
-            branchStock: currentBranchStockMap,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return product;
-      })
-    );
+        setProducts((prev) => prev.map((p) => (p.id === product.id ? updatedProd : p)));
+        saveDocument(COLLECTIONS.PRODUCTS, product.id, updatedProd);
+      }
+    });
 
-    // 2. Update Customer record if registered
+    // 2. Update Customer record if registered in Firestore
     if (saleData.customerId) {
-      setCustomers((prevCustomers) =>
-        prevCustomers.map((cust) => {
-          if (cust.id === saleData.customerId) {
-            return {
-              ...cust,
-              totalSpent: cust.totalSpent + saleData.amountPaid,
-              creditBalance: cust.creditBalance + balanceDue,
-              totalPurchasesCount: cust.totalPurchasesCount + 1,
-            };
-          }
-          return cust;
-        })
-      );
+      const customer = customers.find((c) => c.id === saleData.customerId);
+      if (customer) {
+        const updatedCust: Customer = {
+          ...customer,
+          totalSpent: customer.totalSpent + saleData.amountPaid,
+          creditBalance: customer.creditBalance + balanceDue,
+          totalPurchasesCount: customer.totalPurchasesCount + 1,
+        };
+        setCustomers((prev) => prev.map((c) => (c.id === customer.id ? updatedCust : c)));
+        saveDocument(COLLECTIONS.CUSTOMERS, customer.id, updatedCust);
+      }
     }
 
-    // 3. Save Sale
+    // 3. Save Sale in Firestore
     setSales((prev) => [newSale, ...prev]);
+    saveDocument(COLLECTIONS.SALES, newSale.id, newSale);
+
     return newSale;
   };
 
@@ -738,52 +894,38 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const refundBranchId = saleToRefund.branchId || activeBranchId;
 
-    // Restore stock
-    setProducts((prevProducts) =>
-      prevProducts.map((product) => {
-        const item = saleToRefund.items.find((i) => i.productId === product.id);
-        if (item) {
-          const currentBranchStockMap = { ...(product.branchStock || {}) };
-          const prevBranchQty = currentBranchStockMap[refundBranchId] ?? product.stock;
-          currentBranchStockMap[refundBranchId] = prevBranchQty + item.quantity;
+    // Restock items in Firestore
+    saleToRefund.items.forEach((item) => {
+      const product = products.find((p) => p.id === item.productId);
+      if (product) {
+        const currentBranchStock = { ...(product.branchStock || {}) };
+        const currentBranchQty = currentBranchStock[refundBranchId] ?? 0;
+        currentBranchStock[refundBranchId] = currentBranchQty + item.quantity;
+        const newTotalStock = product.stock + item.quantity;
 
-          return {
-            ...product,
-            stock: product.stock + item.quantity,
-            branchStock: currentBranchStockMap,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return product;
-      })
-    );
+        const updatedProd: Product = {
+          ...product,
+          stock: newTotalStock,
+          branchStock: currentBranchStock,
+          updatedAt: new Date().toISOString(),
+        };
 
-    // If customer had credit, reduce balance
-    if (saleToRefund.customerId && saleToRefund.balanceDue > 0) {
-      setCustomers((prev) =>
-        prev.map((c) =>
-          c.id === saleToRefund.customerId
-            ? { ...c, creditBalance: Math.max(0, c.creditBalance - saleToRefund.balanceDue) }
-            : c
-        )
-      );
-    }
+        setProducts((prev) => prev.map((p) => (p.id === product.id ? updatedProd : p)));
+        saveDocument(COLLECTIONS.PRODUCTS, product.id, updatedProd);
+      }
+    });
 
-    // Mark sale as refunded
-    setSales((prev) =>
-      prev.map((s) =>
-        s.id === saleId
-          ? {
-              ...s,
-              status: 'refunded',
-              notes: s.notes ? `${s.notes} [Refunded: ${reason}]` : `[Refunded: ${reason}]`,
-            }
-          : s
-      )
-    );
+    const updatedSale: Sale = {
+      ...saleToRefund,
+      status: 'refunded',
+      notes: `${saleToRefund.notes || ''} [Refunded on ${new Date().toLocaleDateString()}: ${reason}]`,
+    };
+
+    setSales((prev) => prev.map((s) => (s.id === saleId ? updatedSale : s)));
+    saveDocument(COLLECTIONS.SALES, saleId, updatedSale);
   };
 
-  // Record Purchases & Increment Stock
+  // Record Purchase & Add to Stock
   const recordPurchase = (purchaseData: {
     supplierId: string;
     supplierName: string;
@@ -804,14 +946,18 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }): Purchase => {
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-    const randNum = Math.floor(100 + Math.random() * 900);
-    const poNumber = `PO-${dateStr}-${randNum}`;
+    const randNum = Math.floor(1000 + Math.random() * 9000);
+    const orderNumber = `PO-${dateStr}-${randNum}`;
+
     const balanceDue = Math.max(0, purchaseData.totalAmount - purchaseData.amountPaid);
-    const paymentStatus = balanceDue <= 0 ? 'paid' : purchaseData.amountPaid > 0 ? 'partial' : 'unpaid';
+    let paymentStatus: Purchase['paymentStatus'] = 'paid';
+    if (balanceDue > 0) {
+      paymentStatus = purchaseData.amountPaid > 0 ? 'partial' : 'unpaid';
+    }
 
     const newPurchase: Purchase = {
       id: `po-${Date.now()}`,
-      poNumber,
+      poNumber: orderNumber,
       branchId: activeBranchId,
       branchName: activeBranch.name,
       supplierId: purchaseData.supplierId,
@@ -823,128 +969,151 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       paymentStatus,
       paymentMethod: purchaseData.paymentMethod,
       date: now.toISOString(),
-      notes: purchaseData.notes,
       received: true,
+      notes: purchaseData.notes,
     };
 
-    // 1. Increment Stock & update branch stock
-    setProducts((prevProducts) =>
-      prevProducts.map((product) => {
-        const item = purchaseData.items.find((pItem) => pItem.productId === product.id);
-        if (item) {
-          const currentBranchStockMap = { ...(product.branchStock || {}) };
-          const prevBranchQty = currentBranchStockMap[activeBranchId] ?? product.stock;
-          currentBranchStockMap[activeBranchId] = prevBranchQty + item.quantity;
+    // 1. Increment Stock in Firestore
+    purchaseData.items.forEach((item) => {
+      const product = products.find((p) => p.id === item.productId);
+      if (product) {
+        const currentBranchStock = { ...(product.branchStock || {}) };
+        const currentQty = currentBranchStock[activeBranchId] ?? 0;
+        currentBranchStock[activeBranchId] = currentQty + item.quantity;
+        const newTotalStock = product.stock + item.quantity;
 
-          return {
-            ...product,
-            stock: product.stock + item.quantity,
-            branchStock: currentBranchStockMap,
-            costPrice: purchaseData.updateCostPrices ? item.unitCost : product.costPrice,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return product;
-      })
-    );
+        const updatedProd: Product = {
+          ...product,
+          stock: newTotalStock,
+          branchStock: currentBranchStock,
+          costPrice: purchaseData.updateCostPrices ? item.unitCost : product.costPrice,
+          updatedAt: new Date().toISOString(),
+        };
 
-    // 2. Update Supplier balance owed if unpaid / partial
+        setProducts((prev) => prev.map((p) => (p.id === product.id ? updatedProd : p)));
+        saveDocument(COLLECTIONS.PRODUCTS, product.id, updatedProd);
+      }
+    });
+
+    // 2. Update Supplier balance if credit purchase
     if (purchaseData.supplierId && balanceDue > 0) {
-      setSuppliers((prevSuppliers) =>
-        prevSuppliers.map((sup) =>
-          sup.id === purchaseData.supplierId
-            ? { ...sup, balanceOwed: sup.balanceOwed + balanceDue }
-            : sup
-        )
-      );
+      const supplier = suppliers.find((s) => s.id === purchaseData.supplierId);
+      if (supplier) {
+        const updatedSupplier: Supplier = {
+          ...supplier,
+          balanceOwed: (supplier.balanceOwed || 0) + balanceDue,
+        };
+        setSuppliers((prev) => prev.map((s) => (s.id === supplier.id ? updatedSupplier : s)));
+        saveDocument(COLLECTIONS.SUPPLIERS, supplier.id, updatedSupplier);
+      }
     }
 
+    // 3. Save Purchase in Firestore
     setPurchases((prev) => [newPurchase, ...prev]);
+    saveDocument(COLLECTIONS.PURCHASES, newPurchase.id, newPurchase);
+
     return newPurchase;
   };
 
-  // Stock Adjustments
+  // Stock Adjustment Action
   const adjustStock = (
     productId: string,
     newQuantity: number,
     reason: StockAdjustment['reason'],
     notes?: string,
-    adjustedBy = currentUser?.name || 'Owner',
-    targetBranchId = activeBranchId
+    adjustedBy?: string,
+    targetBranchId?: string
   ) => {
     const product = products.find((p) => p.id === productId);
     if (!product) return;
 
-    const previousBranchStock = getProductBranchStock(product, targetBranchId);
-    const difference = newQuantity - previousBranchStock;
-    const targetBranch = branches.find((b) => b.id === targetBranchId) || activeBranch;
+    const branchToAdjust = targetBranchId || activeBranchId;
+    const currentBranchStock = { ...(product.branchStock || {}) };
+    const prevBranchStock = currentBranchStock[branchToAdjust] ?? 0;
+    const difference = newQuantity - prevBranchStock;
 
+    currentBranchStock[branchToAdjust] = newQuantity;
+    const newTotalStock = Math.max(0, product.stock + difference);
+
+    const updatedProd: Product = {
+      ...product,
+      stock: newTotalStock,
+      branchStock: currentBranchStock,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setProducts((prev) => prev.map((p) => (p.id === productId ? updatedProd : p)));
+    saveDocument(COLLECTIONS.PRODUCTS, productId, updatedProd);
+
+    const adjBranch = branches.find((b) => b.id === branchToAdjust);
     const newAdj: StockAdjustment = {
       id: `adj-${Date.now()}`,
       productId,
       productName: product.name,
       sku: product.sku,
-      branchId: targetBranchId,
-      branchName: targetBranch.name,
-      previousStock: previousBranchStock,
+      branchId: branchToAdjust,
+      branchName: adjBranch?.name || activeBranch.name,
+      previousStock: prevBranchStock,
       newStock: newQuantity,
       difference,
       reason,
       notes,
       date: new Date().toISOString(),
-      adjustedBy,
+      adjustedBy: adjustedBy || currentUser?.name || 'Owner',
     };
 
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.id !== productId) return p;
-        const currentBranchStockMap = { ...(p.branchStock || {}) };
-        currentBranchStockMap[targetBranchId] = newQuantity;
-        const newTotal = Object.values(currentBranchStockMap).reduce((a: number, b: number) => a + (Number(b) || 0), 0);
-
-        return {
-          ...p,
-          stock: newTotal,
-          branchStock: currentBranchStockMap,
-          updatedAt: new Date().toISOString(),
-        };
-      })
-    );
-
     setStockAdjustments((prev) => [newAdj, ...prev]);
+    saveDocument(COLLECTIONS.ADJUSTMENTS, newAdj.id, newAdj);
   };
 
-  // Supplier handlers
-  const addSupplier = (supData: Omit<Supplier, 'id' | 'createdAt' | 'balanceOwed'>): Supplier => {
-    const newSup: Supplier = {
-      ...supData,
-      id: `sup-${Date.now()}`,
+  // Supplier Handlers
+  const addSupplier = (supplierData: Omit<Supplier, 'id' | 'createdAt' | 'balanceOwed'>): Supplier => {
+    const newSupp: Supplier = {
+      ...supplierData,
+      id: `supp-${Date.now()}`,
       balanceOwed: 0,
       createdAt: new Date().toISOString(),
     };
-    setSuppliers((prev) => [newSup, ...prev]);
-    return newSup;
+    setSuppliers((prev) => [...prev, newSupp]);
+    saveDocument(COLLECTIONS.SUPPLIERS, newSupp.id, newSupp);
+    return newSupp;
   };
 
   const updateSupplier = (id: string, data: Partial<Supplier>) => {
-    setSuppliers((prev) => prev.map((s) => (s.id === id ? { ...s, ...data } : s)));
+    setSuppliers((prev) =>
+      prev.map((s) => {
+        if (s.id === id) {
+          const updated = { ...s, ...data };
+          saveDocument(COLLECTIONS.SUPPLIERS, id, updated);
+          return updated;
+        }
+        return s;
+      })
+    );
   };
 
   const deleteSupplier = (id: string) => {
     setSuppliers((prev) => prev.filter((s) => s.id !== id));
+    deleteDocument(COLLECTIONS.SUPPLIERS, id);
   };
 
   const recordSupplierPayment = (supplierId: string, amount: number, paymentMethod: PaymentMethod, note?: string) => {
     setSuppliers((prev) =>
-      prev.map((s) =>
-        s.id === supplierId
-          ? { ...s, balanceOwed: Math.max(0, s.balanceOwed - amount) }
-          : s
-      )
+      prev.map((s) => {
+        if (s.id === supplierId) {
+          const updated = {
+            ...s,
+            balanceOwed: Math.max(0, (s.balanceOwed || 0) - amount),
+          };
+          saveDocument(COLLECTIONS.SUPPLIERS, supplierId, updated);
+          return updated;
+        }
+        return s;
+      })
     );
 
     addExpense({
-      title: `Supplier Debt Settle: ${suppliers.find((s) => s.id === supplierId)?.name || 'Supplier'}`,
+      title: `Payment to supplier: ${suppliers.find((s) => s.id === supplierId)?.name || 'Supplier'}`,
       category: 'other',
       amount,
       date: new Date().toISOString(),
@@ -963,29 +1132,43 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       totalPurchasesCount: 0,
       createdAt: new Date().toISOString(),
     };
-    setCustomers((prev) => [newCust, ...prev]);
+    setCustomers((prev) => [...prev, newCust]);
+    saveDocument(COLLECTIONS.CUSTOMERS, newCust.id, newCust);
     return newCust;
   };
 
   const updateCustomer = (id: string, data: Partial<Customer>) => {
-    setCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)));
+    setCustomers((prev) =>
+      prev.map((c) => {
+        if (c.id === id) {
+          const updated = { ...c, ...data };
+          saveDocument(COLLECTIONS.CUSTOMERS, id, updated);
+          return updated;
+        }
+        return c;
+      })
+    );
   };
 
   const deleteCustomer = (id: string) => {
     setCustomers((prev) => prev.filter((c) => c.id !== id));
+    deleteDocument(COLLECTIONS.CUSTOMERS, id);
   };
 
   const recordCustomerPayment = (customerId: string, amount: number, paymentMethod: PaymentMethod, note?: string) => {
     setCustomers((prev) =>
-      prev.map((c) =>
-        c.id === customerId
-          ? {
-              ...c,
-              creditBalance: Math.max(0, c.creditBalance - amount),
-              totalSpent: c.totalSpent + amount,
-            }
-          : c
-      )
+      prev.map((c) => {
+        if (c.id === customerId) {
+          const updated = {
+            ...c,
+            creditBalance: Math.max(0, c.creditBalance - amount),
+            totalSpent: c.totalSpent + amount,
+          };
+          saveDocument(COLLECTIONS.CUSTOMERS, customerId, updated);
+          return updated;
+        }
+        return c;
+      })
     );
 
     let remainingAmount = amount;
@@ -997,13 +1180,15 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const newBalance = sale.balanceDue - deduction;
           const newPaid = sale.amountPaid + deduction;
           const newStatus = newBalance <= 0 ? 'completed' : 'credit_partial';
-          return {
+          const updatedSale: Sale = {
             ...sale,
             amountPaid: newPaid,
             balanceDue: newBalance,
             status: newStatus,
             notes: sale.notes ? `${sale.notes} [Payment recvd: ${formatCurrency(deduction)}]` : `[Payment recvd: ${formatCurrency(deduction)}]`,
           };
+          saveDocument(COLLECTIONS.SALES, sale.id, updatedSale);
+          return updatedSale;
         }
         return sale;
       })
@@ -1019,16 +1204,22 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       branchName: activeBranch?.name,
     };
     setExpenses((prev) => [newExp, ...prev]);
+    saveDocument(COLLECTIONS.EXPENSES, newExp.id, newExp);
     return newExp;
   };
 
   const deleteExpense = (id: string) => {
     setExpenses((prev) => prev.filter((e) => e.id !== id));
+    deleteDocument(COLLECTIONS.EXPENSES, id);
   };
 
   // Settings
   const updateSettings = (newSettings: Partial<ShopSettings>) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
+    setSettings((prev) => {
+      const updated = { ...prev, ...newSettings };
+      saveDocument(COLLECTIONS.STORE_META, 'global_settings', updated);
+      return updated;
+    });
   };
 
   // Reset to initial sample data
@@ -1045,16 +1236,29 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCustomers(initialCustomers);
     setExpenses(initialExpenses);
     setStockAdjustments(initialStockAdjustments);
+
+    seedInitialFirestoreData({
+      branches: initialBranches,
+      accounts: initialAccounts,
+      settings: initialSettings,
+      products: initialProducts,
+      suppliers: initialSuppliers,
+      customers: initialCustomers,
+      sales: initialSales,
+      purchases: initialPurchases,
+      expenses: initialExpenses,
+      stockAdjustments: initialStockAdjustments,
+    });
   };
 
   // Backup & Export Helpers
   const exportJSONBackup = () => {
     const backupData = {
-      version: '2.0',
-      exportedAt: new Date().toISOString(),
-      settings,
+      exportDate: new Date().toISOString(),
+      appVersion: '3.0.0-firebase',
       branches,
       accounts,
+      settings,
       products,
       sales,
       purchases,
@@ -1063,90 +1267,113 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
       expenses,
       stockAdjustments,
     };
-    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `shop-multibranch-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(backupData, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute('download', `shop-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
   };
 
   const importJSONBackup = (jsonData: string): boolean => {
     try {
-      const data = JSON.parse(jsonData);
-      if (data.products && data.settings) {
-        if (data.settings) setSettings(data.settings);
-        if (data.branches) setBranches(data.branches);
-        if (data.accounts) setAccounts(data.accounts);
-        if (data.products) setProducts(data.products);
-        if (data.sales) setSales(data.sales);
-        if (data.purchases) setPurchases(data.purchases);
-        if (data.suppliers) setSuppliers(data.suppliers);
-        if (data.customers) setCustomers(data.customers);
-        if (data.expenses) setExpenses(data.expenses);
-        if (data.stockAdjustments) setStockAdjustments(data.stockAdjustments);
-        return true;
+      const parsed = JSON.parse(jsonData);
+      if (!parsed.products || !parsed.sales) {
+        throw new Error('Invalid JSON format');
       }
-      return false;
-    } catch {
+
+      if (parsed.settings) setSettings(parsed.settings);
+      if (parsed.branches) setBranches(parsed.branches);
+      if (parsed.accounts) setAccounts(parsed.accounts);
+      if (parsed.products) setProducts(parsed.products);
+      if (parsed.sales) setSales(parsed.sales);
+      if (parsed.purchases) setPurchases(parsed.purchases);
+      if (parsed.suppliers) setSuppliers(parsed.suppliers);
+      if (parsed.customers) setCustomers(parsed.customers);
+      if (parsed.expenses) setExpenses(parsed.expenses);
+      if (parsed.stockAdjustments) setStockAdjustments(parsed.stockAdjustments);
+
+      seedInitialFirestoreData({
+        branches: parsed.branches || branches,
+        accounts: parsed.accounts || accounts,
+        settings: parsed.settings || settings,
+        products: parsed.products || products,
+        suppliers: parsed.suppliers || suppliers,
+        customers: parsed.customers || customers,
+        sales: parsed.sales || sales,
+        purchases: parsed.purchases || purchases,
+        expenses: parsed.expenses || expenses,
+        stockAdjustments: parsed.stockAdjustments || stockAdjustments,
+      });
+
+      return true;
+    } catch (e) {
+      console.error('Error importing backup:', e);
       return false;
     }
   };
 
   const exportSalesCSV = () => {
-    const headers = ['Receipt No', 'Date', 'Branch', 'Cashier', 'Customer', 'Items Count', 'Subtotal', 'Discount', 'Tax', 'Grand Total', 'Payment Method', 'Status', 'Profit'];
+    const headers = [
+      'Receipt No',
+      'Date',
+      'Branch',
+      'Cashier',
+      'Customer',
+      'Items Count',
+      'Subtotal',
+      'Discount',
+      'Tax',
+      'Grand Total',
+      'Amount Paid',
+      'Balance Due',
+      'Status',
+      'Payment Method',
+    ];
     const rows = sales.map((s) => [
       `"${s.receiptNo}"`,
       `"${new Date(s.date).toLocaleString()}"`,
-      `"${s.branchName || ''}"`,
-      `"${s.cashierName || ''}"`,
+      `"${s.branchName || 'Head Store'}"`,
+      `"${s.cashierName || 'Cashier'}"`,
       `"${s.customerName}"`,
       s.items.reduce((acc, i) => acc + i.quantity, 0),
       s.subtotal.toFixed(2),
       s.discount.toFixed(2),
       s.taxAmount.toFixed(2),
       s.grandTotal.toFixed(2),
-      `"${s.paymentMethod}"`,
+      s.amountPaid.toFixed(2),
+      s.balanceDue.toFixed(2),
       `"${s.status}"`,
-      s.profit.toFixed(2),
+      `"${s.paymentMethod}"`,
     ]);
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     downloadCSV(csvContent, `sales-report-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
   const exportStockCSV = () => {
-    const branchHeaders = branches.map((b) => `Stock (${b.name})`).join(',');
-    const headers = ['Product Name', 'SKU', 'Barcode', 'Category', 'Unit', 'Cost Price', 'Selling Price', 'Margin %', 'Total Stock', branchHeaders, 'Min Alert Level', 'Total Cost Value', 'Total Retail Value'];
-    const rows = products.map((p) => {
-      const margin = p.sellingPrice > 0 ? (((p.sellingPrice - p.costPrice) / p.sellingPrice) * 100).toFixed(1) : '0';
-      const branchCols = branches.map((b) => p.branchStock?.[b.id] ?? 0).join(',');
-      return [
-        `"${p.name.replace(/"/g, '""')}"`,
-        `"${p.sku}"`,
-        `"${p.barcode}"`,
-        `"${p.category}"`,
-        `"${p.unit}"`,
-        p.costPrice.toFixed(2),
-        p.sellingPrice.toFixed(2),
-        `"${margin}%"`,
-        p.stock,
-        branchCols,
-        p.minStockAlert,
-        (p.costPrice * p.stock).toFixed(2),
-        (p.sellingPrice * p.stock).toFixed(2),
-      ].join(',');
-    });
-    const csvContent = [headers.join(','), ...rows].join('\n');
-    downloadCSV(csvContent, `multibranch-inventory-stock-${new Date().toISOString().slice(0, 10)}.csv`);
+    const headers = ['Product Name', 'SKU', 'Barcode', 'Category', 'Total Stock', ...branches.map((b) => `Stock (${b.name})`), 'Cost Price', 'Selling Price', 'Min Stock Alert'];
+    const rows = products.map((p) => [
+      `"${p.name}"`,
+      `"${p.sku}"`,
+      `"${p.barcode || ''}"`,
+      `"${p.category}"`,
+      p.stock,
+      ...branches.map((b) => getProductBranchStock(p, b.id)),
+      p.costPrice.toFixed(2),
+      p.sellingPrice.toFixed(2),
+      p.minStockAlert,
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    downloadCSV(csvContent, `inventory-stock-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
   const exportPurchasesCSV = () => {
-    const headers = ['PO Number', 'Date', 'Branch', 'Supplier', 'Items Count', 'Total Amount', 'Amount Paid', 'Balance Due', 'Payment Status', 'Payment Method'];
+    const headers = ['PO Number', 'Date', 'Branch', 'Supplier', 'Items Count', 'Total Amount', 'Amount Paid', 'Balance Due', 'Status', 'Payment Method'];
     const rows = purchases.map((p) => [
       `"${p.poNumber}"`,
       `"${new Date(p.date).toLocaleString()}"`,
-      `"${p.branchName || ''}"`,
+      `"${p.branchName || 'Head Store'}"`,
       `"${p.supplierName}"`,
       p.items.reduce((acc, i) => acc + i.quantity, 0),
       p.totalAmount.toFixed(2),
@@ -1235,6 +1462,7 @@ export const ShopProvider: React.FC<{ children: React.ReactNode }> = ({ children
         exportSalesCSV,
         exportStockCSV,
         exportPurchasesCSV,
+        isCloudSynced,
         lowStockProducts,
         totalStockCostValue,
         totalStockRetailValue,
@@ -1255,4 +1483,3 @@ export const useShop = () => {
   }
   return context;
 };
-

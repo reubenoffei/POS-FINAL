@@ -623,9 +623,25 @@ export const SettingsView: React.FC = () => {
 
       {/* SECTION 4: DATA EXPORT & BACKUP TOOLS */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-4">
-        <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-          <ShieldCheck className="w-4 h-4 text-emerald-600" />
-          <h3 className="font-bold text-slate-900 text-sm">Data Backup, CSV Export & System Recovery</h3>
+        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <h3 className="font-bold text-slate-900 text-sm">Cloud Firestore Database & Multi-Branch Synchronization</h3>
+          </div>
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span>Firebase Connected (Real-time)</span>
+          </span>
+        </div>
+
+        <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-3.5 text-xs text-indigo-950 flex items-start gap-2.5">
+          <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold">Real-time Cloud Inventory & Sales Synchronization Active</p>
+            <p className="text-slate-600 text-[11px] mt-0.5">
+              Whenever a cashier rings up a sale or you update inventory quantities, stock changes and sales records propagate across all devices and branches instantly via Google Cloud Firestore.
+            </p>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
